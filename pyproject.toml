@@ -1,0 +1,28 @@
+[project]
+name = "llm-filter-be-project"
+version = "0.1.0"
+description = "LLM Stock Screener"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "accelerate>=1.11.0",
+    "duckdb>=1.4.4",
+    "ipykernel>=7.1.0",
+    "lm-eval>=0.4.9.1",
+    "matplotlib>=3.10.7",
+    "notebook>=7.4.7",
+    "openai>=2.7.1",
+    "pandas>=2.3.3",
+    "promptfoo>=0.1.0",
+    "pyarrow>=22.0.0",
+    "python-dotenv>=1.2.1",
+    "rich>=14.2.0",
+    "sexpdata>=1.0.2",
+    "torch>=2.9.0",
+    "transformers>=4.57.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

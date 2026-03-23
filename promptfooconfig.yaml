@@ -1,0 +1,747 @@
+prompts:
+    - "\nYou are a financial-filter generator.\n\nInput: Free-form user text describing\
+      \ financial screening criteria.\nOutput: A *single valid S-expression* representing\
+      \ the filters.\n\nIf the user\u2019s request is a financial query (e.g., stock screening,\
+      \ ratios, prices, etc.):\n    - Respond only with a single top-level S-expression.\n\
+      \    - Use standard Lisp-like syntax: parentheses to group logic and operations.\n\
+      \    - Never output natural-language text, markdown, code fences, or commentary.\n\
+      \nGrammar:\n    <expr> ::= (<logicop> <expr> <expr> ...)\n             | (<compop>\
+      \ <expr> <expr>)\n             | (<arithop> <expr> <expr>)\n             | <metric>\n\
+      \             | <number>\n\nRules:\n  - Metrics are atomic symbols. Do NOT wrap\
+      \ them in parentheses.\n  - Valid examples:\n        (gt 30DayPercentageChange 365DayPercentageChange)\n\
+      \        (gt (mul 30DayPercentageChange 2) 365DayPercentageChange)\n  - Invalid\
+      \ examples:\n        (30DayPercentageChange 365DayPercentageChange)\n        (PercentageChange\
+      \ 30DayPercentageChange)\n\nSupported logic operators:\n    and, or, not\n\nSupported\
+      \ comparison operators:\n    gt, lt, geq, leq, neq\n    These map to >, <, \u2265\
+      , \u2264 and \u2260 respectively.\n\nSupported arithmetic operators:\n    add, sub,\
+      \ mul, div\n\nSupported metrics:\n    Datetime,\n    Open,\n    High,\n    Low,\n\
+      \    Close,\n    PreviousClose,\n    ShareVolume,\n    Value,\n    30DayPercentageChange,\n\
+      \    365DayPercentageChange,\n    EarningsPerShare,\n    Ticker,\n    Sector,\n\
+      \    Industry,\n    MarketCap,\n    PeRatio,\n    PbRatio,\n    DividendYield,\n\
+      \    Beta,\n    FloatShares\n\nExamples:\n    User query: \"asdfasdfasd\"\n    Output:\
+      \ (error \"non-finance\")\n\n    User query: \"hi how are you\"\n    Output: (error\
+      \ \"non-finance\")\n\n    User query: \"stocks where High is greater than Low\"\n\
+      \    Output: (gt High Low)\n\n    User query: \"companies with Change > 5 and Percentage\
+      \ Change > 3\"\n    Output: (and (gt Change 0.05) (gt PercentageChange 0.03))\n\n\
+      \    User query: \"stocks with (High - Low) > 10\"\n    Output: (gt (sub High Low)\
+      \ 10)\n\n    User query: \"P/E less than 20\"\n    Output: (lt PeRatio 20)\n\nAll\
+      \ Percentages should be converted to decimals. You are encouraged to represent large\
+      \ numbers (greater than 999,999) in normalized python scientific notation such as:\
+      \ 6720000000 = 6.72e9. 10000000 = 1e7. 1,000,000,000,000 = 1e12.\n\nIf the request\
+      \ CANNOT reasonably be interpreted as a financial or stock-related question \n(for\
+      \ example it contains random text, personal chat, nonsense, jokes, code, or any\
+      \ topic \nunrelated to stocks, shares, prices, performance, or similar):\n    Output\
+      \ EXACTLY the following string and nothing else:\n        (error \"non-finance\"\
+      )\n\nNever attempt to infer or create a financial interpretation for unrelated text.\n\
+      \nIf the request IS a financial question but uses metrics not available in supported\
+      \ metrics:\n    Output EXACTLY:\n        (error \"insufficient metrics\")\n\nDo\
+      \ not include \"User query:\" or \"Output:\" prefixes in your answer under any circumstance.\n\
+      \nUser query: {{prompt}}"
+providers:
+    - id: openrouter:qwen/qwen3-14b
+      config:
+          temperature: 0
+          max_tokens: 2192
+          showThinking: false
+tests:
+    - description: "simple: MarketCap greater than 1 billion..."
+      vars:
+          prompt: MarketCap greater than 1 billion
+      assert:
+          - type: equals
+            value: (gt MarketCap 1e9)
+    - description: "simple: P/E ratio below 15..."
+      vars:
+          prompt: P/E ratio below 15
+      assert:
+          - type: equals
+            value: (lt PeRatio 15)
+    - description: "simple: Show me stocks with a dividend yield of at least 3%..."
+      vars:
+          prompt: Show me stocks with a dividend yield of at least 3%
+      assert:
+          - type: equals
+            value: (geq DividendYield 0.03)
+    - description: "simple: Beta is less than or equal to 1.0..."
+      vars:
+          prompt: Beta is less than or equal to 1.0
+      assert:
+          - type: equals
+            value: (leq Beta 1.0)
+    - description: "simple: Close price is not the same as the previous day's close..."
+      vars:
+          prompt: Close price is not the same as the previous day's close
+      assert:
+          - type: equals
+            value: (neq Close PreviousClose)
+    - description: "simple: Share volume exceeds 1,000,000..."
+      vars:
+          prompt: Share volume exceeds 1,000,000
+      assert:
+          - type: equals
+            value: (gt ShareVolume 1e6)
+    - description: "simple: Find companies with negative earnings per share..."
+      vars:
+          prompt: Find companies with negative earnings per share
+      assert:
+          - type: equals
+            value: (lt EarningsPerShare 0)
+    - description: "simple: PB ratio is above 2..."
+      vars:
+          prompt: PB ratio is above 2
+      assert:
+          - type: equals
+            value: (gt PbRatio 2)
+    - description: "simple: 30 day percentage change is positive..."
+      vars:
+          prompt: 30 day percentage change is positive
+      assert:
+          - type: equals
+            value: (gt 30DayPercentageChange 0)
+    - description: "simple: Float shares are under 500 million..."
+      vars:
+          prompt: Float shares are under 500 million
+      assert:
+          - type: equals
+            value: (lt FloatShares 5e8)
+    - description: "simple: The daily high was higher than the previous close..."
+      vars:
+          prompt: The daily high was higher than the previous close
+      assert:
+          - type: equals
+            value: (gt High PreviousClose)
+    - description: "simple: Market cap over 2 trillion..."
+      vars:
+          prompt: Market cap over 2 trillion
+      assert:
+          - type: equals
+            value: (gt MarketCap 2e12)
+    - description: "simple: price to book ratio greater than 1..."
+      vars:
+          prompt: price to book ratio greater than 1
+      assert:
+          - type: equals
+            value: (gt PbRatio 1)
+    - description: "simple: 365 day change is below -10%..."
+      vars:
+          prompt: 365 day change is below -10%
+      assert:
+          - type: equals
+            value: (lt 365DayPercentageChange -0.10)
+    - description: "simple: The high wasn't the same as the low..."
+      vars:
+          prompt: The high wasn't the same as the low
+      assert:
+          - type: equals
+            value: (neq High Low)
+    - description: "simple: Show me stocks where the value traded is at least 10 million..."
+      vars:
+          prompt: Show me stocks where the value traded is at least 10 million
+      assert:
+          - type: equals
+            value: (geq Value 1e7)
+    - description: "simple: The low for the day was below the previous close..."
+      vars:
+          prompt: The low for the day was below the previous close
+      assert:
+          - type: equals
+            value: (lt Low PreviousClose)
+    - description: "simple: The open was higher than the close..."
+      vars:
+          prompt: The open was higher than the close
+      assert:
+          - type: equals
+            value: (gt Open Close)
+    - description: "simple: beta of 0.5..."
+      vars:
+          prompt: beta of 0.5
+      assert:
+          - type: equals
+            value: (leq Beta 0.5)
+    - description: "simple: PE ratio of more than 100..."
+      vars:
+          prompt: PE ratio of more than 100
+      assert:
+          - type: equals
+            value: (gt PeRatio 100)
+    - description:
+          "simple_arithmetic: the daily range (high minus low) is greater than
+          5..."
+      vars:
+          prompt: the daily range (high minus low) is greater than 5
+      assert:
+          - type: equals
+            value: (gt (sub High Low) 5)
+    - description: "simple_arithmetic: Twice the P/E ratio is less than the P/B ratio..."
+      vars:
+          prompt: Twice the P/E ratio is less than the P/B ratio
+      assert:
+          - type: equals
+            value: (lt (mul 2 PeRatio) PbRatio)
+    - description: "simple_arithmetic: Market cap divided by float shares is over 100..."
+      vars:
+          prompt: Market cap divided by float shares is over 100
+      assert:
+          - type: equals
+            value: (gt (div MarketCap FloatShares) 100)
+    - description: "simple_arithmetic: Open plus close divided by 2 is greater than high..."
+      vars:
+          prompt: Open plus close divided by 2 is greater than high
+      assert:
+          - type: equals
+            value: (gt (div (add Open Close) 2) High)
+    - description: "error_handling: what is the best stock to buy..."
+      vars:
+          prompt: what is the best stock to buy
+      assert:
+          - type: equals
+            value: (error "non-finance")
+    - description: "error_handling: tell me a joke..."
+      vars:
+          prompt: tell me a joke
+      assert:
+          - type: equals
+            value: (error "non-finance")
+    - description: "error_handling: asdlkfjasdlkfj..."
+      vars:
+          prompt: asdlkfjasdlkfj
+      assert:
+          - type: equals
+            value: (error "non-finance")
+    - description: "error_handling: stocks with a good ROE..."
+      vars:
+          prompt: stocks with a good ROE
+      assert:
+          - type: equals
+            value: (error "insufficient metrics")
+    - description: "error_handling: price to sales ratio below 2..."
+      vars:
+          prompt: price to sales ratio below 2
+      assert:
+          - type: equals
+            value: (error "insufficient metrics")
+    - description: "error_handling: Show me EV/EBITDA less than 10..."
+      vars:
+          prompt: Show me EV/EBITDA less than 10
+      assert:
+          - type: equals
+            value: (error "insufficient metrics")
+    - description: "error_handling: list all tickers..."
+      vars:
+          prompt: list all tickers
+      assert:
+          - type: equals
+            value: (error "insufficient metrics")
+    - description: "simple: stocks that closed higher than they opened..."
+      vars:
+          prompt: stocks that closed higher than they opened
+      assert:
+          - type: equals
+            value: (gt Close Open)
+    - description: "simple: DividendYield more than 0..."
+      vars:
+          prompt: DividendYield more than 0
+      assert:
+          - type: equals
+            value: (gt DividendYield 0)
+    - description: "simple: a beta that isn't 1..."
+      vars:
+          prompt: a beta that isn't 1
+      assert:
+          - type: equals
+            value: (neq Beta 1)
+    - description: "simple: 30DayPercentageChange is less than 365DayPercentageChange..."
+      vars:
+          prompt: 30DayPercentageChange is less than 365DayPercentageChange
+      assert:
+          - type: equals
+            value: (lt 30DayPercentageChange 365DayPercentageChange)
+    - description: "simple: companies with more than 1 billion float shares..."
+      vars:
+          prompt: companies with more than 1 billion float shares
+      assert:
+          - type: equals
+            value: (gt FloatShares 1e9)
+    - description: "simple: ShareVolume is at most 500000..."
+      vars:
+          prompt: ShareVolume is at most 500000
+      assert:
+          - type: equals
+            value: (leq ShareVolume 500000)
+    - description: "simple: The P/E is under 10..."
+      vars:
+          prompt: The P/E is under 10
+      assert:
+          - type: equals
+            value: (lt PeRatio 10)
+    - description: "simple: The total value is no less than 20000000..."
+      vars:
+          prompt: The total value is no less than 20000000
+      assert:
+          - type: equals
+            value: (geq Value 2e7)
+    - description: "simple: The market cap is not 0..."
+      vars:
+          prompt: The market cap is not 0
+      assert:
+          - type: equals
+            value: (neq MarketCap 0)
+    - description: "medium: P/E ratio under 20 and dividend yield over 2%..."
+      vars:
+          prompt: P/E ratio under 20 and dividend yield over 2%
+      assert:
+          - type: equals
+            value: (and (lt PeRatio 20) (gt DividendYield 0.02))
+    - description: "medium: Market cap over 100B and a beta below 1.2..."
+      vars:
+          prompt: Market cap over 100B and a beta below 1.2
+      assert:
+          - type: equals
+            value: (and (gt MarketCap 1e11) (lt Beta 1.2))
+    - description: "medium: Either the P/E is less than 10 or the P/B is less than 1..."
+      vars:
+          prompt: Either the P/E is less than 10 or the P/B is less than 1
+      assert:
+          - type: equals
+            value: (or (lt PeRatio 10) (lt PbRatio 1))
+    - description: "medium: Share volume is over 1M but the value is under 50M..."
+      vars:
+          prompt: Share volume is over 1M but the value is under 50M
+      assert:
+          - type: equals
+            value: (and (gt ShareVolume 1e6) (lt Value 5e7))
+    - description: "medium: Stocks that did not have a positive 30 day change..."
+      vars:
+          prompt: Stocks that did not have a positive 30 day change
+      assert:
+          - type: equals
+            value: (not (gt 30DayPercentageChange 0))
+    - description: "medium: Companies with a positive EPS and a PE ratio less than 25..."
+      vars:
+          prompt: Companies with a positive EPS and a PE ratio less than 25
+      assert:
+          - type: equals
+            value: (and (gt EarningsPerShare 0) (lt PeRatio 25))
+    - description: "medium: The 30 day change is bigger than the 365 day change..."
+      vars:
+          prompt: The 30 day change is bigger than the 365 day change
+      assert:
+          - type: equals
+            value: (gt 30DayPercentageChange 365DayPercentageChange)
+    - description:
+          "medium: Show stocks with high volatility, where beta is above 1.5
+          or..."
+      vars:
+          prompt:
+              Show stocks with high volatility, where beta is above 1.5 or the daily
+              range is over 5% of the close price
+      assert:
+          - type: equals
+            value: (or (gt Beta 1.5) (gt (sub High Low) (mul Close 0.05)))
+    - description: "medium: No dividend and a negative 1-year performance..."
+      vars:
+          prompt: No dividend and a negative 1-year performance
+      assert:
+          - type: equals
+            value: (and (leq DividendYield 0) (lt 365DayPercentageChange 0))
+    - description: "medium: The close is higher than the open and the low is higher than..."
+      vars:
+          prompt:
+              The close is higher than the open and the low is higher than the previous
+              close
+      assert:
+          - type: equals
+            value: (and (gt Close Open) (gt Low PreviousClose))
+    - description: "medium: Market cap between 50B and 200B..."
+      vars:
+          prompt: Market cap between 50B and 200B
+      assert:
+          - type: equals
+            value: (and (gt MarketCap 5e10) (lt MarketCap 2e11))
+    - description: "medium: Not a high P/E ratio (less than 40) and pays a dividend..."
+      vars:
+          prompt: Not a high P/E ratio (less than 40) and pays a dividend
+      assert:
+          - type: equals
+            value: (and (lt PeRatio 40) (gt DividendYield 0))
+    - description: "medium: P/E is not between 15 and 25..."
+      vars:
+          prompt: P/E is not between 15 and 25
+      assert:
+          - type: equals
+            value: (not (and (gt PeRatio 15) (lt PeRatio 25)))
+    - description: "medium: The stock is up over the last month and year..."
+      vars:
+          prompt: The stock is up over the last month and year
+      assert:
+          - type: equals
+            value: (and (gt 30DayPercentageChange 0) (gt 365DayPercentageChange 0))
+    - description:
+          "medium: Daily range (High-Low) is over 3, and volume is at least 2
+          m..."
+      vars:
+          prompt: Daily range (High-Low) is over 3, and volume is at least 2 million shares.
+      assert:
+          - type: equals
+            value: (and (gt (sub High Low) 3) (geq ShareVolume 2e6))
+    - description: "medium: Dividend yield is between 1% and 4%..."
+      vars:
+          prompt: Dividend yield is between 1% and 4%
+      assert:
+          - type: equals
+            value: (and (geq DividendYield 0.01) (leq DividendYield 0.04))
+    - description: "medium: Either a beta less than 0.8 or a P/E greater than 50..."
+      vars:
+          prompt: Either a beta less than 0.8 or a P/E greater than 50
+      assert:
+          - type: equals
+            value: (or (lt Beta 0.8) (gt PeRatio 50))
+    - description: "medium: The market cap is not zero and the P/E ratio is not negative..."
+      vars:
+          prompt: The market cap is not zero and the P/E ratio is not negative
+      assert:
+          - type: equals
+            value: (and (neq MarketCap 0) (not (lt PeRatio 0)))
+    - description: "medium: Show companies with negative EPS but a positive 365 day chan..."
+      vars:
+          prompt: Show companies with negative EPS but a positive 365 day change
+      assert:
+          - type: equals
+            value: (and (lt EarningsPerShare 0) (gt 365DayPercentageChange 0))
+    - description: "medium: The stock gapped up, meaning Open is greater than PreviousCl..."
+      vars:
+          prompt:
+              The stock gapped up, meaning Open is greater than PreviousClose, and had
+              a total value traded of over 100M
+      assert:
+          - type: equals
+            value: (and (gt Open PreviousClose) (gt Value 1e8))
+    - description: "medium: PE ratio is positive and below 20..."
+      vars:
+          prompt: PE ratio is positive and below 20
+      assert:
+          - type: equals
+            value: (and (gt PeRatio 0) (lt PeRatio 20))
+    - description:
+          "medium: The stock is not a penny stock (Close > 5) and has a market
+          ..."
+      vars:
+          prompt:
+              The stock is not a penny stock (Close > 5) and has a market cap over 300
+              million.
+      assert:
+          - type: equals
+            value: (and (gt Close 5) (gt MarketCap 3e8))
+    - description: "medium: High beta (over 1.5) and high volume (over 10 million shares..."
+      vars:
+          prompt: High beta (over 1.5) and high volume (over 10 million shares).
+      assert:
+          - type: equals
+            value: (and (gt Beta 1.5) (gt ShareVolume 1e7))
+    - description: "medium: Find stocks where the P/E ratio is less than the P/B ratio..."
+      vars:
+          prompt: Find stocks where the P/E ratio is less than the P/B ratio
+      assert:
+          - type: equals
+            value: (lt PeRatio PbRatio)
+    - description:
+          "medium: A company where the FloatShares make up less than half of
+          th..."
+      vars:
+          prompt:
+              A company where the FloatShares make up less than half of the MarketCap
+              divided by the Close price.
+      assert:
+          - type: equals
+            value: (lt FloatShares (div (div MarketCap Close) 2))
+    - description: "medium: P/E and P/B are both greater than 0..."
+      vars:
+          prompt: P/E and P/B are both greater than 0
+      assert:
+          - type: equals
+            value: (and (gt PeRatio 0) (gt PbRatio 0))
+    - description: "medium: 30-day change is negative, but not by more than 10%..."
+      vars:
+          prompt: 30-day change is negative, but not by more than 10%
+      assert:
+          - type: equals
+            value: (and (lt 30DayPercentageChange 0) (gt 30DayPercentageChange -0.1))
+    - description: "medium: Either no dividend is paid or the beta is below 1...."
+      vars:
+          prompt: Either no dividend is paid or the beta is below 1.
+      assert:
+          - type: equals
+            value: (or (leq DividendYield 0) (lt Beta 1))
+    - description:
+          "medium: Show stocks that are up on the year but where the close was
+          ..."
+      vars:
+          prompt:
+              Show stocks that are up on the year but where the close was below the
+              open
+      assert:
+          - type: equals
+            value: (and (gt 365DayPercentageChange 0) (lt Close Open))
+    - description: "medium: The EPS is not zero and the market cap is above 1 billion..."
+      vars:
+          prompt: The EPS is not zero and the market cap is above 1 billion
+      assert:
+          - type: equals
+            value: (and (neq EarningsPerShare 0) (gt MarketCap 1e9))
+    - description: "hard: Mega-cap stocks (MarketCap > 200B) with a low P/E (< 20) and..."
+      vars:
+          prompt:
+              Mega-cap stocks (MarketCap > 200B) with a low P/E (< 20) and a dividend
+              yield over 1%, or any stock with a beta under 0.5
+      assert:
+          - type: equals
+            value:
+                (or (and (gt MarketCap 2e11) (lt PeRatio 20) (gt DividendYield 0.01)) (lt
+                Beta 0.5))
+    - description: "hard: Value stocks (P/E < 15, P/B < 2) that are also large-cap (Ma..."
+      vars:
+          prompt:
+              Value stocks (P/E < 15, P/B < 2) that are also large-cap (MarketCap >
+              10B)
+      assert:
+          - type: equals
+            value: (and (lt PeRatio 15) (lt PbRatio 2) (gt MarketCap 1e10))
+    - description:
+          "hard: Find companies that are profitable (EPS > 0), have a market
+          ..."
+      vars:
+          prompt:
+              Find companies that are profitable (EPS > 0), have a market cap over 50B,
+              and are not expensive (P/E < 30 and P/B < 3).
+      assert:
+          - type: equals
+            value:
+                (and (gt EarningsPerShare 0) (gt MarketCap 5e10) (lt PeRatio 30) (lt PbRatio
+                3))
+    - description:
+          "hard: Stocks that have either a very low P/E (<10) or a very high
+          ..."
+      vars:
+          prompt:
+              Stocks that have either a very low P/E (<10) or a very high yield (>5%),
+              but not both.
+      assert:
+          - type: equals
+            value:
+                (and (or (lt PeRatio 10) (gt DividendYield 0.05)) (not (and (lt PeRatio
+                10) (gt DividendYield 0.05))))
+    - description: "hard: The daily price fluctuation as a percentage of the opening p..."
+      vars:
+          prompt:
+              The daily price fluctuation as a percentage of the opening price ((High
+              - Low) / Open) is more than 3%.
+      assert:
+          - type: equals
+            value: (gt (div (sub High Low) Open) 0.03)
+    - description: "hard: Market cap per share (MarketCap / FloatShares) is at least 1..."
+      vars:
+          prompt:
+              Market cap per share (MarketCap / FloatShares) is at least 1.5 times the
+              closing price.
+      assert:
+          - type: equals
+            value: (geq (div MarketCap FloatShares) (mul Close 1.5))
+    - description: "hard: Find stocks where the 30-day performance was better than the..."
+      vars:
+          prompt:
+              Find stocks where the 30-day performance was better than the 365-day performance
+              and the beta is below 1, or any stock where the P/E is below 5.
+      assert:
+          - type: equals
+            value:
+                (or (and (gt 30DayPercentageChange 365DayPercentageChange) (lt Beta 1))
+                (lt PeRatio 5))
+    - description: "hard: A company whose market cap is at least 50 times its total ea..."
+      vars:
+          prompt:
+              A company whose market cap is at least 50 times its total earnings (EPS
+              * FloatShares)
+      assert:
+          - type: equals
+            value: (geq MarketCap (mul 50 (mul EarningsPerShare FloatShares)))
+    - description: "hard: Not a tech stock with a high P/E ratio...."
+      vars:
+          prompt: Not a tech stock with a high P/E ratio.
+      assert:
+          - type: equals
+            value: (error "insufficient metrics")
+    - description: "hard: Find stocks where the open price was outside the previous da..."
+      vars:
+          prompt: Find stocks where the open price was outside the previous day's range
+      assert:
+          - type: equals
+            value: (error "insufficient metrics")
+    - description: "hard: Show stocks with a P/E greater than 15 and either a dividend..."
+      vars:
+          prompt:
+              Show stocks with a P/E greater than 15 and either a dividend yield above
+              2% or a P/B ratio below 1.5.
+      assert:
+          - type: equals
+            value: (and (gt PeRatio 15) (or (gt DividendYield 0.02) (lt PbRatio 1.5)))
+    - description: "hard: Stocks whose market cap is not between 10B and 100B, and who..."
+      vars:
+          prompt:
+              Stocks whose market cap is not between 10B and 100B, and whose beta is
+              greater than 1.
+      assert:
+          - type: equals
+            value: (and (not (and (gt MarketCap 1e10) (lt MarketCap 1e11))) (gt Beta 1))
+    - description:
+          "hard: The company's P/E ratio is lower than its 30-day percentage
+          ..."
+      vars:
+          prompt:
+              The company's P/E ratio is lower than its 30-day percentage change (assuming
+              change is a whole number, e.g. 5 for 5%)
+      assert:
+          - type: equals
+            value: (lt PeRatio (mul 30DayPercentageChange 100))
+    - description: "hard: Find growth stocks: 365DayPercentageChange > 25% and EPS > 0..."
+      vars:
+          prompt:
+              "Find growth stocks: 365DayPercentageChange > 25% and EPS > 0, but exclude
+              those with a dividend yield > 1%."
+      assert:
+          - type: equals
+            value:
+                (and (gt 365DayPercentageChange 0.25) (gt EarningsPerShare 0) (not (gt
+                DividendYield 0.01)))
+    - description: "hard: A stock that is not volatile (beta < 1) and not expensive (P..."
+      vars:
+          prompt:
+              A stock that is not volatile (beta < 1) and not expensive (P/E < 20),
+              but has performed well (365DayChange > 15%).
+      assert:
+          - type: equals
+            value: (and (lt Beta 1) (lt PeRatio 20) (gt 365DayPercentageChange 0.15))
+    - description: "hard: Stocks where the close is within 1% of the high (Close >= Hi..."
+      vars:
+          prompt: Stocks where the close is within 1% of the high (Close >= High * 0.99)
+      assert:
+          - type: equals
+            value: (geq Close (mul High 0.99))
+    - description: "hard: Stocks where the P/E is positive but less than the beta mult..."
+      vars:
+          prompt:
+              Stocks where the P/E is positive but less than the beta multiplied by
+              20.
+      assert:
+          - type: equals
+            value: (and (gt PeRatio 0) (lt PeRatio (mul Beta 20)))
+    - description: "hard: I want stocks that are either undervalued (P/B < 1) with low..."
+      vars:
+          prompt:
+              I want stocks that are either undervalued (P/B < 1) with low volatility
+              (Beta < 1), or are mega-cap growers (MarketCap > 500B and 365DayPercentageChange
+              > 0.20)
+      assert:
+          - type: equals
+            value:
+                (or (and (lt PbRatio 1) (lt Beta 1)) (and (gt MarketCap 5e11) (gt 365DayPercentageChange
+                0.20)))
+    - description: "hard: Find all stocks except those with negative EPS and a beta ov..."
+      vars:
+          prompt: Find all stocks except those with negative EPS and a beta over 1.5
+      assert:
+          - type: equals
+            value: (not (and (lt EarningsPerShare 0) (gt Beta 1.5)))
+    - description: "hard: The market cap is more than 10B, the P/E is not over 100, an..."
+      vars:
+          prompt:
+              The market cap is more than 10B, the P/E is not over 100, and the dividend
+              yield is not zero.
+      assert:
+          - type: equals
+            value: (and (gt MarketCap 1e10) (not (gt PeRatio 100)) (neq DividendYield 0))
+    - description: "hard: A stock where the close is more than the average of the high..."
+      vars:
+          prompt:
+              A stock where the close is more than the average of the high and low,
+              and also more than the average of the open and close.
+      assert:
+          - type: equals
+            value:
+                (and (gt Close (div (add High Low) 2)) (gt Close (div (add Open Close)
+                2)))
+    - description: "hard: Stocks where the 30-day performance is positive, but less th..."
+      vars:
+          prompt:
+              Stocks where the 30-day performance is positive, but less than half of
+              the 365-day performance.
+      assert:
+          - type: equals
+            value:
+                (and (gt 30DayPercentageChange 0) (lt 30DayPercentageChange (div 365DayPercentageChange
+                2)))
+    - description: "hard: Find companies where (MarketCap / Value) is greater than 100..."
+      vars:
+          prompt:
+              Find companies where (MarketCap / Value) is greater than 100, suggesting
+              low turnover.
+      assert:
+          - type: equals
+            value: (gt (div MarketCap Value) 100)
+    - description: "hard: I'm looking for stocks that gapped down (Open < PreviousClos..."
+      vars:
+          prompt:
+              I'm looking for stocks that gapped down (Open < PreviousClose) and also
+              closed red (Close < Open) and traded over 10M in value.
+      assert:
+          - type: equals
+            value: (and (lt Open PreviousClose) (lt Close Open) (gt Value 1e7))
+    - description:
+          "hard: Stocks whose P/E ratio is within 2 points of its P/B ratio.
+          ..."
+      vars:
+          prompt:
+              Stocks whose P/E ratio is within 2 points of its P/B ratio. (i.e. abs(PE
+              - PB) <= 2)
+      assert:
+          - type: equals
+            value: (and (leq (sub PeRatio PbRatio) 2) (geq (sub PeRatio PbRatio) -2))
+    - description: "hard: Companies where the sum of PE and PB ratios is less than 30...."
+      vars:
+          prompt: Companies where the sum of PE and PB ratios is less than 30.
+      assert:
+          - type: equals
+            value: (lt (add PeRatio PbRatio) 30)
+    - description: "hard: The one-year change is positive, and the 30-day change is ei..."
+      vars:
+          prompt:
+              The one-year change is positive, and the 30-day change is either also
+              positive or not worse than -5%.
+      assert:
+          - type: equals
+            value:
+                (and (gt 365DayPercentageChange 0) (or (gt 30DayPercentageChange 0) (geq
+                30DayPercentageChange -0.05)))
+    - description: "hard: The stock price is not crazy, i.e. P/E is not over 100 and P..."
+      vars:
+          prompt:
+              The stock price is not crazy, i.e. P/E is not over 100 and P/B is not
+              over 10.
+      assert:
+          - type: equals
+            value: (and (not (gt PeRatio 100)) (not (gt PbRatio 10)))
+    - description: "hard: Stocks whose implied price per share from market cap (Market..."
+      vars:
+          prompt:
+              Stocks whose implied price per share from market cap (MarketCap / FloatShares)
+              is not wildly different from its close price (not more than a 10% difference)
+      assert:
+          - type: equals
+            value: (leq (sub (div MarketCap FloatShares) Close) (mul Close 0.1))
+    - description: "hard: Either (market cap > 1T and beta < 1) or (market cap < 1B an..."
+      vars:
+          prompt: Either (market cap > 1T and beta < 1) or (market cap < 1B and beta > 2)
+      assert:
+          - type: equals
+            value:
+                (or (and (gt MarketCap 1e13) (lt Beta 1)) (and (lt MarketCap 1e10) (gt
+                Beta 2)))
