@@ -75,6 +75,9 @@ def generate_fundamentals(num_tickers: int) -> pd.DataFrame:
             div_yield = np.random.uniform(0, 0.05)
             beta = np.clip(np.random.normal(1.0, 0.35), 0.5, 2.0)
             float_shares = np.random.uniform(10e6, 5e9)
+            month_chg = np.random.normal(0.02, 0.08)
+            year_chg = np.random.normal(0.10, 0.25)
+            eps = np.random.uniform(0.5, 20)
             data.append(
                 {
                     "Ticker": t,
@@ -86,6 +89,9 @@ def generate_fundamentals(num_tickers: int) -> pd.DataFrame:
                     "DividendYield": div_yield,
                     "Beta": beta,
                     "FloatShares": float_shares,
+                    "MonthPercentageChange": month_chg,
+                    "YearPercentageChange": year_chg,
+                    "EarningsPerShare": eps,
                 }
             )
         df = pd.DataFrame(data)
