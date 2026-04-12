@@ -802,9 +802,19 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
             pass
 
     async def generate():
+        # Trim history to avoid exceeding model context window (98K tokens).
+        # Keep only the last 20 messages and drop any with very long content.
+        trimmed_history = []
+        for msg in history[-20:]:
+            c = msg.get("content", "")
+            if isinstance(c, str) and len(c) > 4000:
+                trimmed_history.append({**msg, "content": c[:4000] + "\n…(truncated)"})
+            else:
+                trimmed_history.append(msg)
+
         messages = (
             [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
-            + history
+            + trimmed_history
             + [{"role": "user", "content": req.message}]
         )
 
@@ -836,7 +846,7 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
                     {"role": "user",      "content": req.message},
                     {"role": "assistant", "content": content},
                 ]
-                asyncio.create_task(_save_session(updated[-40:]))
+                asyncio.create_task(_save_session(updated[-20:]))
                 yield f"data: {_json.dumps({'type': 'done', 'session_id': session_id})}\n\n"
                 return
 
@@ -867,10 +877,14 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
                 result = await loop.run_in_executor(
                     None, lambda n=t_name, a=t_args: _execute_chat_tool(n, a)
                 )
+                result_str = _json.dumps(result)
+                # Cap tool output to avoid blowing up context window
+                if len(result_str) > 6000:
+                    result_str = result_str[:6000] + '…"}'
                 messages.append({
                     "role":         "tool",
                     "tool_call_id": tc.id,
-                    "content":      _json.dumps(result),
+                    "content":      result_str,
                 })
 
             tool_rounds += 1
@@ -900,7 +914,7 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
             {"role": "user",      "content": req.message},
             {"role": "assistant", "content": full_response},
         ]
-        asyncio.create_task(_save_session(updated[-40:]))
+        asyncio.create_task(_save_session(updated[-20:]))
         yield f"data: {_json.dumps({'type': 'done', 'session_id': session_id})}\n\n"
 
     return StreamingResponse(
