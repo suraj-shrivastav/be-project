@@ -421,6 +421,29 @@ class SaveQueryRequest(BaseModel):
     name: str
     prompt: str
     sql: Optional[str] = None
+    filters: Optional[list] = None
+    query_type: str = "prompt"
+
+
+class UpdateSavedRequest(BaseModel):
+    name: Optional[str] = None
+    prompt: Optional[str] = None
+    sql: Optional[str] = None
+    filters: Optional[list] = None
+    query_type: Optional[str] = None
+
+
+class StructuredFilter(BaseModel):
+    column: str
+    operator: str   # gt, lt, gte, lte, eq, neq
+    value: Any
+
+
+class StructuredQueryRequest(BaseModel):
+    filters: list[StructuredFilter]
+    order_by: Optional[str] = None
+    order_dir: Optional[str] = "desc"
+    limit: Optional[int] = 50
 
 
 class HistoryRequest(BaseModel):
@@ -713,6 +736,104 @@ async def get_columns():
     return {"columns": columns}
 
 
+# ── Structured query (visual builder) ────────────────────────────────────────
+
+_OP_MAP = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<=", "eq": "=", "neq": "!="}
+
+
+@app.get("/api/columns/meta")
+async def get_columns_meta():
+    """Return column metadata for the visual screener builder."""
+    from models.prompts import COLUMN_TYPES
+
+    if _conn is None:
+        raise HTTPException(status_code=503, detail="DB not ready")
+
+    meta = []
+    for col, col_type in COLUMN_TYPES.items():
+        if col_type == "date":
+            continue
+        entry: dict[str, Any] = {"name": col, "type": col_type}
+        if col_type == "categorical" and col != "Ticker":
+            try:
+                df = _conn.execute(
+                    f'SELECT DISTINCT "{col}" FROM fundamentals WHERE "{col}" IS NOT NULL ORDER BY "{col}"'
+                ).fetchdf()
+                entry["values"] = df[col].tolist()
+            except Exception:
+                entry["values"] = []
+        meta.append(entry)
+    return {"columns": meta}
+
+
+@app.post("/api/query/structured")
+async def run_structured_query(req: StructuredQueryRequest):
+    """Execute a structured filter query — deterministic SQL, no LLM needed."""
+    from models.prompts import COLUMN_TYPES, columns as ALLOWED
+
+    if _conn is None:
+        raise HTTPException(status_code=503, detail="DB not ready")
+
+    if not req.filters:
+        raise HTTPException(status_code=400, detail="At least one filter is required")
+
+    allowed_set = set(ALLOWED)
+    clauses: list[str] = []
+    params: list[Any] = []
+    idx = 1
+
+    for f in req.filters:
+        if f.column not in allowed_set:
+            raise HTTPException(status_code=400, detail=f"Unknown column: {f.column}")
+        if f.operator not in _OP_MAP:
+            raise HTTPException(status_code=400, detail=f"Unknown operator: {f.operator}")
+
+        col_type = COLUMN_TYPES.get(f.column, "numeric")
+        op_sql = _OP_MAP[f.operator]
+
+        if col_type == "categorical":
+            if f.operator not in ("eq", "neq"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Categorical column {f.column} only supports 'eq' and 'neq'",
+                )
+            clauses.append(f'"{f.column}" {op_sql} ${idx}')
+            params.append(str(f.value))
+        else:
+            try:
+                numeric_val = float(f.value)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Numeric value required for {f.column}, got: {f.value}",
+                )
+            clauses.append(f'"{f.column}" {op_sql} ${idx}')
+            params.append(numeric_val)
+        idx += 1
+
+    where_sql = " AND ".join(clauses)
+    sql = f"SELECT * FROM fundamentals WHERE {where_sql}"
+
+    if req.order_by and req.order_by in allowed_set:
+        direction = "ASC" if req.order_dir == "asc" else "DESC"
+        sql += f' ORDER BY "{req.order_by}" {direction}'
+
+    limit = min(req.limit or 50, 500)
+    sql += f" LIMIT {limit}"
+
+    try:
+        df = _conn.execute(sql, params).fetchdf()
+        result = _df_to_dict(df)
+        result["sql"] = sql
+        asyncio.create_task(_log_event(
+            "structured_query",
+            metadata={"filters": [f.model_dump() for f in req.filters], "row_count": result["row_count"]},
+        ))
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Query failed: {exc}")
+
+
 # ── Indian Stock Market API (live data) ──────────────────────────────────────
 
 
@@ -777,18 +898,72 @@ async def get_saved(current_user: dict = Depends(get_current_user), db: AsyncSes
         .order_by(SavedQuery.created_at.desc())
     )
     return [
-        {"id": q.id, "name": q.name, "prompt": q.prompt, "sql": q.sql, "created_at": q.created_at.isoformat()}
+        {
+            "id": q.id, "name": q.name, "prompt": q.prompt, "sql": q.sql,
+            "filters": getattr(q, "filters", None),
+            "query_type": getattr(q, "query_type", "prompt"),
+            "created_at": q.created_at.isoformat(),
+            "updated_at": q.updated_at.isoformat() if getattr(q, "updated_at", None) else None,
+        }
         for q in rows.all()
     ]
 
 
 @app.post("/api/saved")
 async def save_query(req: SaveQueryRequest, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    entry = SavedQuery(user_id=current_user["id"], name=req.name, prompt=req.prompt, sql=req.sql)
+    entry = SavedQuery(
+        user_id=current_user["id"], name=req.name, prompt=req.prompt,
+        sql=req.sql, filters=req.filters, query_type=req.query_type,
+    )
     db.add(entry)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        # Fallback: new columns may not exist yet — retry without them
+        entry2 = SavedQuery(
+            user_id=current_user["id"], name=req.name, prompt=req.prompt, sql=req.sql,
+        )
+        db.add(entry2)
+        await db.commit()
+        await db.refresh(entry2)
+        return {
+            "id": entry2.id, "name": entry2.name, "prompt": entry2.prompt, "sql": entry2.sql,
+            "filters": None, "query_type": "prompt",
+            "created_at": entry2.created_at.isoformat(), "updated_at": None,
+        }
+    await db.refresh(entry)
+    return {
+        "id": entry.id, "name": entry.name, "prompt": entry.prompt, "sql": entry.sql,
+        "filters": entry.filters, "query_type": entry.query_type,
+        "created_at": entry.created_at.isoformat(),
+        "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+    }
+
+
+@app.put("/api/saved/{saved_id}")
+async def update_saved(saved_id: str, req: UpdateSavedRequest, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    entry = await db.get(SavedQuery, saved_id)
+    if not entry or entry.user_id != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    if req.name is not None:
+        entry.name = req.name
+    if req.prompt is not None:
+        entry.prompt = req.prompt
+    if req.sql is not None:
+        entry.sql = req.sql
+    if req.filters is not None:
+        entry.filters = req.filters
+    if req.query_type is not None:
+        entry.query_type = req.query_type
     await db.commit()
     await db.refresh(entry)
-    return {"id": entry.id, "name": entry.name, "prompt": entry.prompt, "sql": entry.sql, "created_at": entry.created_at.isoformat()}
+    return {
+        "id": entry.id, "name": entry.name, "prompt": entry.prompt, "sql": entry.sql,
+        "filters": entry.filters, "query_type": entry.query_type,
+        "created_at": entry.created_at.isoformat(),
+        "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+    }
 
 
 @app.delete("/api/saved/{saved_id}")

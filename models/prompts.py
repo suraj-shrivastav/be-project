@@ -21,6 +21,20 @@ columns = [
     "FloatShares",
 ]
 
+COLUMN_TYPES = {
+    "Open": "numeric", "High": "numeric", "Low": "numeric", "Close": "numeric",
+    "PreviousClose": "numeric", "ShareVolume": "numeric", "Value": "numeric",
+    "MonthPercentageChange": "numeric", "YearPercentageChange": "numeric",
+    "EarningsPerShare": "numeric", "MarketCap": "numeric", "PeRatio": "numeric",
+    "PbRatio": "numeric", "DividendYield": "numeric", "Beta": "numeric",
+    "FloatShares": "numeric",
+    "Ticker": "categorical", "Sector": "categorical", "Industry": "categorical",
+    "Datetime": "date",
+}
+
+NUMERIC_COLUMNS = [c for c, t in COLUMN_TYPES.items() if t == "numeric"]
+CATEGORICAL_COLUMNS = [c for c, t in COLUMN_TYPES.items() if t == "categorical"]
+
 KNOWN_METRICS = set(columns) | {
     "non-finance",
     "insufficient metrics",

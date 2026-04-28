@@ -33,7 +33,10 @@ class SavedQuery(Base):
     name:       Mapped[str]           = mapped_column(Text, nullable=False)
     prompt:     Mapped[str]           = mapped_column(Text, nullable=False)
     sql:        Mapped[str | None]    = mapped_column(Text, nullable=True)
+    filters:    Mapped[list | None]   = mapped_column(JSONB, nullable=True)
+    query_type: Mapped[str]           = mapped_column(String(16), nullable=False, default="prompt")
     created_at: Mapped[datetime]      = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime]      = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 class QueryHistory(Base):

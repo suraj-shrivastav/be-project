@@ -18,9 +18,17 @@ CREATE TABLE IF NOT EXISTS saved_queries (
     name       TEXT        NOT NULL,
     prompt     TEXT        NOT NULL,
     sql        TEXT,
-    created_at TIMESTAMPTZ DEFAULT now()
+    filters    JSONB,
+    query_type VARCHAR(16) NOT NULL DEFAULT 'prompt',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_saved_queries_user ON saved_queries(user_id, created_at DESC);
+
+-- Migration for existing tables:
+-- ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS filters JSONB;
+-- ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS query_type VARCHAR(16) NOT NULL DEFAULT 'prompt';
+-- ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 -- ── Query history ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS query_history (
