@@ -38,31 +38,31 @@ SUPABASE_ANON_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
 
 _chat_client: Optional[AsyncOpenAI] = None
 
-CHAT_MODEL = "qwen/qwen3-14b"
+CHAT_MODEL = "qwen/qwen3.5-397b-a17b"
 
-CHAT_SYSTEM_PROMPT = """You are a stock market research assistant built into a stock screener platform.
+CHAT_SYSTEM_PROMPT = """You are a professional stock market research analyst built into a stock screener platform. You provide institutional-quality analysis.
 
-You ONLY help with questions about:
-- Stocks, shares, and equity markets (US, Indian BSE/NSE, and global)
-- Financial metrics (P/E ratio, market cap, EPS, beta, dividends, etc.)
-- Company fundamentals and financial analysis
-- Sector and industry analysis
-- Stock screening and filtering criteria
-- Investment concepts and financial literacy
-- Indian market data: live quotes, trending stocks, IPOs, and company news
+**Domain**: Stocks, equity markets (US, Indian BSE/NSE, global), financial metrics, company fundamentals, sector analysis, screening criteria, investment concepts, IPOs, and market news.
 
-If asked about ANYTHING else (sports, cooking, general knowledge, weather, politics, etc.),
-respond with exactly: "I'm a stock market specialist — ask me about stocks, companies, or financial metrics!"
+If asked about anything outside finance/markets, reply exactly: "I'm a stock market specialist -- ask me about stocks, companies, or financial metrics!"
 
-Rules:
-- Explain financial terms in plain, simple language
-- When showing data, always add context (e.g. "this P/E is below the sector average")
-- Never say "you should buy/sell X" — describe what the data shows instead
-- Keep answers concise; use bullet points for lists
-- If the user's intent is unclear, ask one clarifying question before calling a tool
-- When you call a tool, summarise the results in plain English — don't just dump raw numbers
-- For Indian stocks, use get_live_indian_stock to fetch real-time BSE/NSE data
-- NEVER use emojis in your responses — no icons, no emoticons, keep it clean text only"""
+**Analysis Framework** -- when discussing any stock or sector:
+1. Start with the key data point the user asked about
+2. Add context: compare to sector averages, historical norms, or peer companies
+3. Highlight what stands out (unusually high/low metrics, divergences)
+4. Note relevant risks or caveats
+
+**Response Rules**:
+- Use clear, structured formatting: headers, bullet points, and bold for key numbers
+- Explain financial terms in plain language for mixed audiences
+- Never recommend buying or selling -- present what the data shows and let the user decide
+- When calling tools, synthesize the results into an analytical narrative, not a raw data dump
+- Cross-reference multiple data points when possible (e.g., "P/E is low at 12x vs sector avg 18x, but earnings declined 15% YoY, which explains the discount")
+- For Indian stocks, always use get_live_indian_stock for real-time BSE/NSE data
+- Use search_web to find latest news, analyst opinions, or market context when the user asks about recent events, earnings, or market sentiment
+- If the user's intent is unclear, ask ONE clarifying question before calling tools
+- NEVER use emojis -- clean text only
+- Keep responses focused and under 400 words unless the user asks for deep analysis"""
 
 CHAT_TOOLS = [
     {
@@ -155,6 +155,23 @@ CHAT_TOOLS = [
             "name": "get_indian_ipo",
             "description": "Get information about upcoming and recently listed IPOs on Indian stock markets.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "Search the web for latest financial news, analyst opinions, earnings reports, market sentiment, or any recent information about stocks and markets. Use this when the user asks about recent events, breaking news, or when you need up-to-date context beyond the database.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query, e.g. 'AAPL Q4 2025 earnings results', 'Indian stock market outlook 2026', 'Tesla latest news'",
+                    }
+                },
+                "required": ["query"],
+            },
         },
     },
 ]
@@ -256,6 +273,16 @@ def _execute_chat_tool(name: str, args: dict) -> dict:
         except Exception as exc:
             return {"error": str(exc)}
 
+    if name == "search_web":
+        from services.tavily_search import search_web as _tavily_search
+        query = args.get("query", "").strip()
+        if not query:
+            return {"error": "Empty search query"}
+        try:
+            return _tavily_search(query, max_results=5)
+        except Exception as exc:
+            return {"error": f"Web search failed: {str(exc)}"}
+
     return {"error": f"Unknown tool: {name}"}
 
 
@@ -298,10 +325,17 @@ async def lifespan(app: FastAPI):
     _guard = GuardModel()
     _filter = Filter()
     _conn = duckdb.connect()
-    _chat_client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.getenv("OPENROUTER_API"),
-    )
+    # Prefer NVIDIA NIM for larger context window & better model; fall back to OpenRouter
+    if os.getenv("NVIDIA_NIM_API_KEY"):
+        _chat_client = AsyncOpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=os.getenv("NVIDIA_NIM_API_KEY"),
+        )
+    else:
+        _chat_client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API"),
+        )
     _conn.execute(
         "CREATE VIEW fundamentals AS SELECT * FROM read_parquet('data/fundamentals.parquet');"
     )
@@ -509,6 +543,8 @@ async def get_stock(ticker: str):
 
         fund_row = {k: _safe(v) for k, v in fund_df.iloc[0].to_dict().items()}
 
+        prices = []
+        technicals = {}
         try:
             # Aggregate minute-level data to daily OHLCV — keeps response small
             price_df = _conn.execute(
@@ -527,11 +563,59 @@ async def get_stock(ticker: str):
                 [ticker],
             ).fetchdf()
             prices = [{k: _safe(v) for k, v in row.items()} for _, row in price_df.iterrows()]
+
+            # Compute technical indicators from daily prices
+            if not price_df.empty and len(price_df) > 1:
+                closes = price_df["Close"].astype(float)
+                volumes = price_df["ShareVolume"].astype(float)
+                highs = price_df["High"].astype(float)
+                lows = price_df["Low"].astype(float)
+                latest_close = float(closes.iloc[-1])
+
+                # 52-week high/low
+                technicals["week52High"] = _safe(highs.max())
+                technicals["week52Low"] = _safe(lows.min())
+
+                # Simple Moving Averages
+                for period in [20, 50, 200]:
+                    if len(closes) >= period:
+                        sma = float(closes.iloc[-period:].mean())
+                        technicals[f"sma{period}"] = _safe(round(sma, 2))
+
+                # Average volume (20-day)
+                if len(volumes) >= 20:
+                    technicals["avgVolume20d"] = _safe(int(volumes.iloc[-20:].mean()))
+
+                # Price change periods
+                for label, days in [("1d", 1), ("1w", 5), ("1m", 21), ("3m", 63), ("6m", 126), ("1y", 252)]:
+                    if len(closes) > days:
+                        prev = float(closes.iloc[-(days + 1)])
+                        if prev != 0:
+                            technicals[f"change{label.upper()}"] = _safe(round((latest_close - prev) / prev, 4))
+
+                # Volatility (20-day annualized)
+                if len(closes) >= 21:
+                    daily_returns = closes.pct_change().dropna().iloc[-20:]
+                    if len(daily_returns) > 0:
+                        vol = float(daily_returns.std() * (252 ** 0.5))
+                        technicals["volatility20d"] = _safe(round(vol, 4))
+
+                # RSI (14-day)
+                if len(closes) >= 15:
+                    deltas = closes.diff().iloc[-15:]
+                    gains = deltas.where(deltas > 0, 0.0)
+                    losses = (-deltas.where(deltas < 0, 0.0))
+                    avg_gain = float(gains.mean())
+                    avg_loss = float(losses.mean())
+                    if avg_loss != 0:
+                        rs = avg_gain / avg_loss
+                        technicals["rsi14"] = _safe(round(100 - (100 / (1 + rs)), 2))
+
         except Exception:
             prices = []
 
         asyncio.create_task(_log_event("stock_viewed", metadata={"ticker": ticker}))
-        return {"fundamentals": fund_row, "prices": prices}
+        return {"fundamentals": fund_row, "prices": prices, "technicals": technicals}
 
     except HTTPException:
         raise
@@ -775,18 +859,27 @@ TOOL_STATUS_LABELS = {
     "get_trending_indian_stocks": "Loading trending Indian stocks…",
     "get_indian_stock_news":      "Pulling latest market news…",
     "get_indian_ipo":             "Fetching IPO listings…",
+    "search_web":                 "Searching the web…",
 }
 
 
 @app.post("/api/chat")
-async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
+async def chat_endpoint(req: ChatRequest):
     if _chat_client is None or _filter is None or _conn is None:
         raise HTTPException(status_code=503, detail="Backend not ready")
 
     session_id = req.session_id or str(uuid.uuid4())
-    db_session = await db.get(ChatSession, session_id)
-    history    = db_session.messages if db_session else []
-    loop       = asyncio.get_event_loop()
+
+    # Load chat history from DB — degrade gracefully if DB is unavailable
+    history: list = []
+    try:
+        async with AsyncSessionLocal() as db:
+            db_session = await db.get(ChatSession, session_id)
+            history = db_session.messages if db_session else []
+    except Exception:
+        pass  # chat works without history persistence
+
+    loop = asyncio.get_event_loop()
 
     async def _save_session(updated_messages: list) -> None:
         try:
@@ -802,13 +895,14 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
             pass
 
     async def generate():
-        # Trim history to avoid exceeding model context window (98K tokens).
-        # Keep only the last 20 messages and drop any with very long content.
+        # Trim history for model context window.
+        # NVIDIA NIM qwen3.5-397b supports 262K context — keep last 40 messages
+        # with generous content limits for richer context.
         trimmed_history = []
-        for msg in history[-20:]:
+        for msg in history[-40:]:
             c = msg.get("content", "")
-            if isinstance(c, str) and len(c) > 4000:
-                trimmed_history.append({**msg, "content": c[:4000] + "\n…(truncated)"})
+            if isinstance(c, str) and len(c) > 8000:
+                trimmed_history.append({**msg, "content": c[:8000] + "\n...(truncated)"})
             else:
                 trimmed_history.append(msg)
 
@@ -818,15 +912,15 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
             + [{"role": "user", "content": req.message}]
         )
 
-        # ── Tool-call loop (non-streaming, up to 3 rounds) ────────────────────
+        # ── Tool-call loop (non-streaming, up to 5 rounds for multi-step analysis)
         tool_rounds = 0
-        while tool_rounds < 3:
+        while tool_rounds < 5:
             tool_resp = await _chat_client.chat.completions.create(
                 model=CHAT_MODEL,
                 messages=messages,
                 tools=CHAT_TOOLS,
                 tool_choice="auto",
-                max_tokens=1024,
+                max_tokens=2048,
             )
             asst = tool_resp.choices[0].message
 
@@ -846,7 +940,7 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
                     {"role": "user",      "content": req.message},
                     {"role": "assistant", "content": content},
                 ]
-                asyncio.create_task(_save_session(updated[-20:]))
+                asyncio.create_task(_save_session(updated[-40:]))
                 yield f"data: {_json.dumps({'type': 'done', 'session_id': session_id})}\n\n"
                 return
 
@@ -878,9 +972,9 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
                     None, lambda n=t_name, a=t_args: _execute_chat_tool(n, a)
                 )
                 result_str = _json.dumps(result)
-                # Cap tool output to avoid blowing up context window
-                if len(result_str) > 6000:
-                    result_str = result_str[:6000] + '…"}'
+                # Cap tool output — larger limit with NIM's bigger context window
+                if len(result_str) > 12000:
+                    result_str = result_str[:12000] + '..."}'
                 messages.append({
                     "role":         "tool",
                     "tool_call_id": tc.id,
@@ -894,7 +988,7 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
             model=CHAT_MODEL,
             messages=messages,
             stream=True,
-            max_tokens=2048,
+            max_tokens=4096,
         )
 
         full_response = ""
@@ -914,7 +1008,7 @@ async def chat_endpoint(req: ChatRequest, db: AsyncSession = Depends(get_db)):
             {"role": "user",      "content": req.message},
             {"role": "assistant", "content": full_response},
         ]
-        asyncio.create_task(_save_session(updated[-20:]))
+        asyncio.create_task(_save_session(updated[-40:]))
         yield f"data: {_json.dumps({'type': 'done', 'session_id': session_id})}\n\n"
 
     return StreamingResponse(

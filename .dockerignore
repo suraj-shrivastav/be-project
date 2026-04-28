@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+.venv
+.env
+.env.*
+.git
+.pytest_cache
+promptfooconfig.yaml
+README.md
+PLAN.md
+RESEARCH.md
+FRONTEND_PLAN.md

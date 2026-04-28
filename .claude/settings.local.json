@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l /a/final-proj/be-project/api.py /a/final-proj/be-project/models/*.py /a/final-proj/be-project/db/*.py /a/final-proj/be-project/services/*.py)",
+      "WebFetch(domain:docs.nvidia.com)",
+      "WebFetch(domain:decodethefuture.org)",
+      "WebFetch(domain:build.nvidia.com)",
+      "Bash(pip install *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('api.py'\\).read\\(\\)\\); print\\('api.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('models/filter.py'\\).read\\(\\)\\); print\\('filter.py: syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('services/tavily_search.py'\\).read\\(\\)\\); print\\('tavily_search.py: syntax OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(timeout 45 python -c ' *)"
+    ]
+  }
+}

@@ -15,12 +15,20 @@ from .sql_validator import SQLValidator, SQLError, SQLQuery
 
 
 class Filter:
-    def __init__(self, model: str = "qwen/qwen3-14b") -> None:
+    def __init__(self, model: str = "qwen/qwen3.5-397b-a17b") -> None:
         self.model_name = model
-        self.api_key = environ["OPENROUTER_API"] or None
-        self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1", api_key=self.api_key
-        )
+        self.api_key = environ.get("NVIDIA_NIM_API_KEY") or environ.get("OPENROUTER_API") or None
+        # Prefer NVIDIA NIM; fall back to OpenRouter
+        if environ.get("NVIDIA_NIM_API_KEY"):
+            self.client = OpenAI(
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key=environ["NVIDIA_NIM_API_KEY"],
+            )
+        else:
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=environ.get("OPENROUTER_API"),
+            )
 
     def __call__(self, prompt: str) -> SQLQuery:
         """Generate SQL query from natural language prompt."""
