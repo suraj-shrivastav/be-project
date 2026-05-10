@@ -1,0 +1,38 @@
+# Backend-only compose — for local dev / single-machine self-hosted deploys.
+# The frontend lives in its own repo and runs separately.
+#
+# Usage:
+#   cp .env.example .env       # fill in secrets
+#   docker compose up --build  # build + run
+#   docker compose run --rm backend python -m scripts.ingest   # one-off ingest
+#   docker compose logs -f     # tail
+#
+# In production you'd typically push the image to a registry and let your
+# host (Render / Fly / Railway / Cloud Run) pull it — this compose is just
+# a convenience for running locally with the same image you'd ship.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: finfilter-backend:latest
+    container_name: finfilter-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist the HF Transformers cache (Qwen3Guard) so a container
+      # restart doesn't re-download the safety model.
+      - hf-cache:/app/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  hf-cache:
