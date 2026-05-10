@@ -1,12 +1,41 @@
+# Python build artifacts
 __pycache__
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Virtualenv (built fresh inside the image)
 .venv
+venv
+
+# Environment / secrets
 .env
 .env.*
+
+# Git + IDE
 .git
-.pytest_cache
-promptfooconfig.yaml
+.gitignore
+.idea
+.vscode
+
+# Local-only files that don't belong in the image
 README.md
 PLAN.md
 RESEARCH.md
 FRONTEND_PLAN.md
+REFACTOR_PLAN.md
+MARKETS_UX.md
+RUN.md
+flow.md
+promptfooconfig.yaml
+
+# Legacy data files (no longer used after Postgres migration)
+data/
+*.parquet
+
+# Test artifacts
+.coverage
+htmlcov/

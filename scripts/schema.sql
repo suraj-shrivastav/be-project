@@ -25,10 +25,11 @@ CREATE TABLE IF NOT EXISTS saved_queries (
 );
 CREATE INDEX IF NOT EXISTS idx_saved_queries_user ON saved_queries(user_id, created_at DESC);
 
--- Migration for existing tables:
--- ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS filters JSONB;
--- ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS query_type VARCHAR(16) NOT NULL DEFAULT 'prompt';
--- ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+-- Idempotent migrations for existing tables created before these columns
+-- existed. Safe to re-run on every schema apply.
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS filters    JSONB;
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS query_type VARCHAR(16) NOT NULL DEFAULT 'prompt';
+ALTER TABLE saved_queries ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 -- ── Query history ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS query_history (
@@ -76,3 +77,73 @@ CREATE TABLE IF NOT EXISTS auth_events (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_auth_events_user ON auth_events(user_id, created_at DESC);
+
+-- ============================================================
+-- Stock data tables (replaces local Parquet + DuckDB)
+-- ============================================================
+
+-- ── Fundamentals (one row per ticker, refreshed nightly) ─────
+CREATE TABLE IF NOT EXISTS fundamentals (
+    ticker            TEXT          PRIMARY KEY,
+    company_name      TEXT          NOT NULL,
+    country           TEXT          NOT NULL,        -- 'US' | 'IN'
+    exchange          TEXT          NOT NULL DEFAULT 'OTHER',  -- 'NSE' | 'BSE' | 'NASDAQ' | 'NYSE' | 'OTHER'
+    currency          TEXT          NOT NULL DEFAULT 'USD',    -- 'INR' | 'USD' | …
+    sector            TEXT,
+    industry          TEXT,
+    description       TEXT,
+    market_cap        BIGINT,
+    pe_ratio          NUMERIC(10,2),
+    pb_ratio          NUMERIC(10,2),
+    dividend_yield    NUMERIC(10,4),
+    beta              NUMERIC(6,3),
+    eps               NUMERIC(10,2),
+    revenue_growth    NUMERIC(10,4),
+    profit_margin     NUMERIC(10,4),
+    debt_to_equity    NUMERIC(10,2),
+    return_on_equity  NUMERIC(10,4),
+    week52_high       NUMERIC(12,2),
+    week52_low        NUMERIC(12,2),
+    last_price        NUMERIC(12,2),
+    month_change      NUMERIC(10,4),
+    year_change       NUMERIC(10,4),
+    updated_at        TIMESTAMPTZ   DEFAULT now()
+);
+
+-- Migration FIRST so existing fundamentals tables get the new columns
+-- before we try to index them. Idempotent — no-op when columns already exist.
+ALTER TABLE fundamentals ADD COLUMN IF NOT EXISTS exchange TEXT NOT NULL DEFAULT 'OTHER';
+ALTER TABLE fundamentals ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'USD';
+
+-- Indexes — safe to create now that the columns are guaranteed to exist
+CREATE INDEX IF NOT EXISTS idx_fundamentals_sector     ON fundamentals(sector);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_country    ON fundamentals(country);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_exchange   ON fundamentals(exchange);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_market_cap ON fundamentals(market_cap DESC);
+
+-- ── Daily OHLCV (replaces minute-level Parquet) ──────────────
+CREATE TABLE IF NOT EXISTS daily_prices (
+    ticker  TEXT          NOT NULL,
+    date    DATE          NOT NULL,
+    open    NUMERIC(12,2),
+    high    NUMERIC(12,2),
+    low     NUMERIC(12,2),
+    close   NUMERIC(12,2),
+    volume  BIGINT,
+    PRIMARY KEY (ticker, date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_prices_ticker_date ON daily_prices(ticker, date DESC);
+
+-- ── Quarterly financials (one row per ticker per quarter end) ─
+-- Used for the trend charts on the stock detail page.
+CREATE TABLE IF NOT EXISTS quarterly_financials (
+    ticker         TEXT          NOT NULL,
+    quarter_end    DATE          NOT NULL,
+    revenue        NUMERIC(20,2),
+    net_income     NUMERIC(20,2),
+    operating_inc  NUMERIC(20,2),
+    gross_profit   NUMERIC(20,2),
+    updated_at     TIMESTAMPTZ   DEFAULT now(),
+    PRIMARY KEY (ticker, quarter_end)
+);
+CREATE INDEX IF NOT EXISTS idx_quarterly_ticker_date ON quarterly_financials(ticker, quarter_end DESC);
